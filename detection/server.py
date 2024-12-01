@@ -2,7 +2,7 @@ import cv2
 import mediapipe as mp
 import asyncio
 from fastapi import FastAPI, WebSocket
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse
 import uvicorn
 import base64
 from typing import List
@@ -28,9 +28,8 @@ class ConnectionManager:
     def disconnect(self, websocket: WebSocket):
         self.active_connections.remove(websocket)
 
-    async def broadcast(self, message: dict):
-        for connection in self.active_connections:
-            await connection.send_json(message)
+    async def send_personal_message(self, message: dict, websocket: WebSocket):
+        await websocket.send_json(message)
 
 manager = ConnectionManager()
 
@@ -53,7 +52,7 @@ def detect_smile(gray_frame, frame):
             return True
     return False
 
-async def process_frame(frame):
+async def process_frame(frame, websocket: WebSocket):
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = hands.process(rgb_frame)
     
@@ -61,37 +60,32 @@ async def process_frame(frame):
         for hand_landmarks in results.multi_hand_landmarks:
             swipe = detect_swipe(hand_landmarks)
             if swipe:
-                await manager.broadcast({"event": swipe})
+                await manager.send_personal_message({"event": swipe}, websocket)
     
     gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     if detect_smile(gray_frame, frame):
-        await manager.broadcast({"event": "smile_detected"})
+        await manager.send_personal_message({"event": "smile_detected"}, websocket)
 
-async def generate_frames():
-    cap = cv2.VideoCapture(0)
-    while True:
-        success, frame = cap.read()
-        if not success:
-            break
-        else:
-            await process_frame(frame)
-            ret, buffer = cv2.imencode('.jpg', frame)
-            frame = buffer.tobytes()
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-
-@app.get("/video_feed")
-async def video_feed():
-    return StreamingResponse(generate_frames(), media_type="multipart/x-mixed-replace; boundary=frame")
+    ret, buffer = cv2.imencode('.jpg', frame)
+    frame_base64 = base64.b64encode(buffer).decode('utf-8')
+    await manager.send_personal_message({"frame": frame_base64}, websocket)
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
+    cap = cv2.VideoCapture(0)
     try:
         while True:
-            await websocket.receive_text()
+            success, frame = cap.read()
+            if not success:
+                break
+            await process_frame(frame, websocket)
+            await asyncio.sleep(0.1)  # Add a small delay to control frame rate
     except Exception as e:
+        print(f"Error: {e}")
+    finally:
         manager.disconnect(websocket)
+        cap.release()
 
 @app.get("/")
 async def get():
@@ -102,14 +96,20 @@ async def get():
         </head>
         <body>
             <h1>Gesture and Smile Detection</h1>
-            <img src="/video_feed" width="640" height="480">
+            <img id="video-feed" width="640" height="480">
             <div id="events"></div>
             <script>
                 const ws = new WebSocket("ws://localhost:8000/ws");
+                const videoFeed = document.getElementById("video-feed");
+                const eventsDiv = document.getElementById("events");
+                
                 ws.onmessage = function(event) {
                     const data = JSON.parse(event.data);
-                    const eventsDiv = document.getElementById("events");
-                    eventsDiv.innerHTML = `<p>Event detected: ${data.event}</p>` + eventsDiv.innerHTML;
+                    if (data.frame) {
+                        videoFeed.src = "data:image/jpeg;base64," + data.frame;
+                    } else if (data.event) {
+                        eventsDiv.innerHTML = `<p>Event detected: ${data.event}</p>` + eventsDiv.innerHTML;
+                    }
                 };
             </script>
         </body>
