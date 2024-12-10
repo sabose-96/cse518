@@ -38,9 +38,9 @@ def detect_swipe(hand_landmarks):
     index_tip_x = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP].x
     diff = index_tip_x - wrist_x
     if diff > 0.1:
-        return "right_swipe"
-    elif diff < -0.1:
         return "left_swipe"
+    elif diff < -0.1:
+        return "right_swipe"
     return None
 
 def detect_smile(gray_frame, frame):
