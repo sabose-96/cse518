@@ -1,3 +1,11 @@
+# Installing
+
+```shell
+pip install -r requirements.txt
+cd frontend
+npm install
+```
+
 # Running the code
 
 Run the server in one terminal first
